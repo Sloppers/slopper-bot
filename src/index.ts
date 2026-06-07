@@ -1,6 +1,7 @@
-import type { Env, IssueCommentEvent, ReportRequest } from './types'
+import type { Env, IssueCommentEvent, ReportRequest, WriteRequest } from './types'
 import { verifySignature } from './verify'
 import { handleApiReport, handleWebhookReport } from './report'
+import { handleWriteAction } from './write'
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -9,6 +10,12 @@ export default {
     }
 
     const url = new URL(request.url)
+    const audience = `${url.protocol}//${url.host}`
+
+    if (url.pathname === '/api/write') {
+      const body = await request.json() as WriteRequest
+      return handleWriteAction(body, env, audience)
+    }
 
     if (url.pathname === '/api/report') {
       const body = await request.json() as ReportRequest

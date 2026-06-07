@@ -13,6 +13,25 @@ export interface ReportRequest {
   commentId: number
 }
 
+export type WriteAction =
+  | { type: 'upsertComment'; pr: number; marker: string; body: string }
+  | { type: 'createComment'; pr: number; body: string }
+  | { type: 'ensureLabel'; name: string; color: string }
+  | { type: 'applyLabels'; pr: number; labels: string[] }
+  | { type: 'removeSlopperLabels'; pr: number }
+  | { type: 'closePr'; pr: number }
+  | { type: 'approvePr'; pr: number; body: string }
+  | { type: 'requestReviewers'; pr: number; reviewers: string[] }
+  | { type: 'createOrUpdateFile'; path: string; message: string; content: string }
+  | { type: 'createVouchPr'; username: string; content: string }
+
+export interface WriteRequest {
+  oidcToken: string
+  owner: string
+  repo: string
+  action: WriteAction
+}
+
 export interface IssueCommentEvent {
   action: string
   comment: {
