@@ -408,15 +408,32 @@ export async function createReportPr(
     body: JSON.stringify({ ref: `refs/heads/${branch}`, sha: refData.object.sha })
   })
 
-  await ghFetch(`${API}/repos/${owner}/${repo}/contents/${path}`, {
+  const putBody: Record<string, unknown> = {
+    message: `slopper: report ${username} (via ${sourceRepo}#${pr})`,
+    content: btoa(content),
+    branch
+  }
+
+  const existingRes = await ghFetch(
+    `${API}/repos/${owner}/${repo}/contents/${path}?ref=${branch}`,
+    { headers: { Authorization: `token ${token}` } }
+  )
+  if (existingRes.ok) {
+    const existing = await existingRes.json() as { sha: string; content: string }
+    putBody.sha = existing.sha
+    const oldContent = atob(existing.content.replace(/\n/g, ''))
+    putBody.content = btoa(`${oldContent}\n---\n${content}`)
+  }
+
+  const fileRes = await ghFetch(`${API}/repos/${owner}/${repo}/contents/${path}`, {
     method: 'PUT',
     headers: { Authorization: `token ${token}` },
-    body: JSON.stringify({
-      message: `slopper: report ${username} (via ${sourceRepo}#${pr})`,
-      content: btoa(content),
-      branch
-    })
+    body: JSON.stringify(putBody)
   })
+  if (!fileRes.ok) {
+    const err = await fileRes.text()
+    throw new Error(`Failed to create file on branch: ${err}`)
+  }
 
   const prRes = await ghFetch(`${API}/repos/${owner}/${repo}/pulls`, {
     method: 'POST',
@@ -433,6 +450,10 @@ export async function createReportPr(
         `This PR was created automatically by [Slopper](https://github.com/Sloppers/Slopper).`
     })
   })
+  if (!prRes.ok) {
+    const err = await prRes.text()
+    throw new Error(`Failed to create PR: ${err}`)
+  }
   const prData = await prRes.json() as { number: number }
   return prData.number
 }
