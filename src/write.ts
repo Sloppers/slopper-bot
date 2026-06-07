@@ -4,6 +4,7 @@ import {
   createAppJwt,
   getInstallationToken,
   getAppInstallation,
+  getFileContent,
   upsertComment,
   createIssueComment,
   ensureLabel,
@@ -30,6 +31,10 @@ export async function handleWriteAction(body: WriteRequest, env: Env, audience: 
     return json({ error: `OIDC verification failed: ${err instanceof Error ? err.message : err}` }, 401)
   }
 
+  if (action.type === 'globalReport') {
+    return handleGlobalReport(action, claims, owner, repo, env)
+  }
+
   if (claims.repository !== `${owner}/${repo}`) {
     return json({ error: `Repository mismatch: token is for ${claims.repository}, request targets ${owner}/${repo}` }, 403)
   }
@@ -47,6 +52,50 @@ export async function handleWriteAction(body: WriteRequest, env: Env, audience: 
     return json({ ok: true, ...result })
   } catch (err) {
     return json({ error: `Action failed: ${err instanceof Error ? err.message : err}` }, 500)
+  }
+}
+
+async function handleGlobalReport(
+  action: { type: 'globalReport'; username: string; reporter: string; pr: number },
+  claims: { repository: string },
+  owner: string,
+  repo: string,
+  env: Env
+): Promise<Response> {
+  const communityOrg = env.COMMUNITY_REPO.split('/')[0]
+  const jwt = await createAppJwt(env.APP_ID, env.PRIVATE_KEY)
+  const installationId = await getAppInstallation(jwt, communityOrg)
+  if (!installationId) {
+    return json({ error: `Slopper App is not installed on ${communityOrg}` }, 500)
+  }
+
+  const token = await getInstallationToken(jwt, installationId)
+  const path = `risky_users/${action.username}`
+
+  const existing = await getFileContent(token, env.COMMUNITY_REPO, path)
+  const entry = [
+    `reporter: ${action.reporter}`,
+    `repo: ${owner}/${repo}`,
+    `pr: #${action.pr}`,
+    `reason: /slopper report`,
+    `date: ${new Date().toISOString()}`
+  ].join('\n')
+
+  if (existing && existing.includes(`reporter: ${action.reporter}`) &&
+      existing.includes(`repo: ${owner}/${repo}`) &&
+      existing.includes(`pr: #${action.pr}`)) {
+    return json({ ok: true, skipped: 'duplicate' })
+  }
+
+  try {
+    await createOrUpdateFile(
+      token, env.COMMUNITY_REPO, path,
+      `report: ${action.username} (via ${owner}/${repo}#${action.pr})`,
+      entry
+    )
+    return json({ ok: true, reported: action.username })
+  } catch (err) {
+    return json({ error: `Failed to report: ${err instanceof Error ? err.message : err}` }, 500)
   }
 }
 

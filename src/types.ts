@@ -24,6 +24,7 @@ export type WriteAction =
   | { type: 'requestReviewers'; pr: number; reviewers: string[] }
   | { type: 'createOrUpdateFile'; path: string; message: string; content: string }
   | { type: 'createVouchPr'; username: string; content: string }
+  | { type: 'globalReport'; username: string; reporter: string; pr: number }
 
 export interface WriteRequest {
   oidcToken: string
