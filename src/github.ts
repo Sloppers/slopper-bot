@@ -382,6 +382,61 @@ export async function createVouchPr(
   return prData.number
 }
 
+export async function createReportPr(
+  token: string,
+  communityRepo: string,
+  username: string,
+  content: string,
+  sourceRepo: string,
+  pr: number,
+  reporter: string
+): Promise<number> {
+  const [owner, repo] = communityRepo.split('/')
+  const defaultBranch = await getDefaultBranch(token, owner, repo)
+  const branch = `slopper/report-${username}-${Date.now()}`
+  const path = `risky_users/${username}`
+
+  const refRes = await ghFetch(
+    `${API}/repos/${owner}/${repo}/git/ref/heads/${defaultBranch}`,
+    { headers: { Authorization: `token ${token}` } }
+  )
+  const refData = await refRes.json() as { object: { sha: string } }
+
+  await ghFetch(`${API}/repos/${owner}/${repo}/git/refs`, {
+    method: 'POST',
+    headers: { Authorization: `token ${token}` },
+    body: JSON.stringify({ ref: `refs/heads/${branch}`, sha: refData.object.sha })
+  })
+
+  await ghFetch(`${API}/repos/${owner}/${repo}/contents/${path}`, {
+    method: 'PUT',
+    headers: { Authorization: `token ${token}` },
+    body: JSON.stringify({
+      message: `slopper: report ${username} (via ${sourceRepo}#${pr})`,
+      content: btoa(content),
+      branch
+    })
+  })
+
+  const prRes = await ghFetch(`${API}/repos/${owner}/${repo}/pulls`, {
+    method: 'POST',
+    headers: { Authorization: `token ${token}` },
+    body: JSON.stringify({
+      title: `slopper: report ${username}`,
+      head: branch,
+      base: defaultBranch,
+      body: `Adding **@${username}** to the risky users list.\n\n` +
+        `- **Reported by:** @${reporter}\n` +
+        `- **Source:** ${sourceRepo}#${pr}\n` +
+        `- **Reason:** \`/slopper report\`\n\n` +
+        `To unban this user, close this PR (or delete the file if already merged).\n\n` +
+        `This PR was created automatically by [Slopper](https://github.com/Sloppers/Slopper).`
+    })
+  })
+  const prData = await prRes.json() as { number: number }
+  return prData.number
+}
+
 async function ghFetch(url: string, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers)
   headers.set('Accept', 'application/vnd.github.v3+json')

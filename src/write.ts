@@ -4,7 +4,6 @@ import {
   createAppJwt,
   getInstallationToken,
   getAppInstallation,
-  getFileContent,
   upsertComment,
   createIssueComment,
   ensureLabel,
@@ -14,7 +13,8 @@ import {
   approvePr,
   requestReviewers,
   createOrUpdateFile,
-  createVouchPr
+  createVouchPr,
+  createReportPr
 } from './github'
 
 export async function handleWriteAction(body: WriteRequest, env: Env, audience: string): Promise<Response> {
@@ -70,9 +70,7 @@ async function handleGlobalReport(
   }
 
   const token = await getInstallationToken(jwt, installationId)
-  const path = `risky_users/${action.username}`
 
-  const existing = await getFileContent(token, env.COMMUNITY_REPO, path)
   const entry = [
     `reporter: ${action.reporter}`,
     `repo: ${owner}/${repo}`,
@@ -81,19 +79,12 @@ async function handleGlobalReport(
     `date: ${new Date().toISOString()}`
   ].join('\n')
 
-  if (existing && existing.includes(`reporter: ${action.reporter}`) &&
-      existing.includes(`repo: ${owner}/${repo}`) &&
-      existing.includes(`pr: #${action.pr}`)) {
-    return json({ ok: true, skipped: 'duplicate' })
-  }
-
   try {
-    await createOrUpdateFile(
-      token, env.COMMUNITY_REPO, path,
-      `report: ${action.username} (via ${owner}/${repo}#${action.pr})`,
-      entry
+    const prNumber = await createReportPr(
+      token, env.COMMUNITY_REPO, action.username, entry,
+      `${owner}/${repo}`, action.pr, action.reporter
     )
-    return json({ ok: true, reported: action.username })
+    return json({ ok: true, reported: action.username, prNumber })
   } catch (err) {
     return json({ error: `Failed to report: ${err instanceof Error ? err.message : err}` }, 500)
   }
