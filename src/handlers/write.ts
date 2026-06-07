@@ -1,8 +1,7 @@
-import type { WriteRequest, Env } from './types'
-import { verifyOidcToken } from './oidc'
-import { getTokenForOrg } from './auth'
-import { GitHubClient } from './github'
-import { json, buildReportEntry } from './helpers'
+import type { WriteRequest, Env } from '../types'
+import { verifyOidcToken, getTokenForOrg } from '../auth'
+import { GitHubClient } from '../client'
+import { json, buildReportEntry } from '../helpers'
 
 export async function handleWriteAction(body: WriteRequest, env: Env, audience: string): Promise<Response> {
   const { oidcToken, owner, repo, action } = body

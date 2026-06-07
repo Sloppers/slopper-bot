@@ -1,7 +1,6 @@
 import type { Env, IssueCommentEvent, ReportRequest, WriteRequest } from './types'
-import { verifySignature } from './verify'
-import { handleApiReport, handleWebhookReport } from './report'
-import { handleWriteAction } from './write'
+import { verifySignature } from './auth'
+import { handleWriteAction, handleApiReport, handleWebhookReport } from './handlers'
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {

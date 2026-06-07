@@ -1,7 +1,7 @@
-import type { ReportRequest, IssueCommentEvent, Env } from './types'
-import { getTokenForOrg, getTokenForInstallation } from './auth'
-import { GitHubClient } from './github'
-import { json, buildReportEntry } from './helpers'
+import type { ReportRequest, IssueCommentEvent, Env } from '../types'
+import { getTokenForOrg, getTokenForInstallation } from '../auth'
+import { GitHubClient, getComment } from '../client'
+import { json, buildReportEntry } from '../helpers'
 
 const REPORT_REGEX = /^\/slopper\s+report\s*$/im
 
@@ -12,7 +12,7 @@ export async function handleApiReport(body: ReportRequest, env: Env): Promise<Re
     return json({ error: 'missing fields' }, 400)
   }
 
-  const comment = await GitHubClient.getComment(owner, repo, commentId)
+  const comment = await getComment(owner, repo, commentId)
   if (!comment) return json({ error: 'comment not found' }, 404)
   if (!REPORT_REGEX.test(comment.body)) return json({ error: 'comment is not a /slopper report' }, 400)
 
