@@ -1,21 +1,8 @@
 import type { WriteRequest, Env } from './types'
 import { verifyOidcToken } from './oidc'
-import {
-  createAppJwt,
-  getInstallationToken,
-  getAppInstallation,
-  upsertComment,
-  createIssueComment,
-  ensureLabel,
-  addLabels,
-  removeSlopperLabels,
-  closePr,
-  approvePr,
-  requestReviewers,
-  createOrUpdateFile,
-  createVouchPr,
-  createReportPr
-} from './github'
+import { getTokenForOrg } from './auth'
+import { GitHubClient } from './github'
+import { json, buildReportEntry } from './helpers'
 
 export async function handleWriteAction(body: WriteRequest, env: Env, audience: string): Promise<Response> {
   const { oidcToken, owner, repo, action } = body
@@ -39,16 +26,10 @@ export async function handleWriteAction(body: WriteRequest, env: Env, audience: 
     return json({ error: `Repository mismatch: token is for ${claims.repository}, request targets ${owner}/${repo}` }, 403)
   }
 
-  const jwt = await createAppJwt(env.APP_ID, env.PRIVATE_KEY)
-  const installationId = await getAppInstallation(jwt, owner)
-  if (!installationId) {
-    return json({ error: `Slopper App is not installed on ${owner}` }, 403)
-  }
-
-  const token = await getInstallationToken(jwt, installationId)
-
   try {
-    const result = await executeAction(token, owner, repo, action)
+    const token = await getTokenForOrg(env, owner)
+    const client = new GitHubClient(token, owner, repo)
+    const result = await executeAction(client, action)
     return json({ ok: true, ...result })
   } catch (err) {
     return json({ error: `Action failed: ${err instanceof Error ? err.message : err}` }, 500)
@@ -62,26 +43,14 @@ async function handleGlobalReport(
   repo: string,
   env: Env
 ): Promise<Response> {
-  const communityOrg = env.COMMUNITY_REPO.split('/')[0]
-  const jwt = await createAppJwt(env.APP_ID, env.PRIVATE_KEY)
-  const installationId = await getAppInstallation(jwt, communityOrg)
-  if (!installationId) {
-    return json({ error: `Slopper App is not installed on ${communityOrg}` }, 500)
-  }
-
-  const token = await getInstallationToken(jwt, installationId)
-
-  const entry = [
-    `reporter: ${action.reporter}`,
-    `repo: ${owner}/${repo}`,
-    `pr: #${action.pr}`,
-    `reason: /slopper report`,
-    `date: ${new Date().toISOString()}`
-  ].join('\n')
+  const [communityOwner, communityRepo] = env.COMMUNITY_REPO.split('/')
 
   try {
-    const prNumber = await createReportPr(
-      token, env.COMMUNITY_REPO, action.username, entry,
+    const token = await getTokenForOrg(env, communityOwner)
+    const client = new GitHubClient(token, communityOwner, communityRepo)
+    const entry = buildReportEntry(action.reporter, `${owner}/${repo}`, action.pr)
+    const prNumber = await client.createReportPr(
+      action.username, entry,
       `${owner}/${repo}`, action.pr, action.reporter
     )
     return json({ ok: true, reported: action.username, prNumber })
@@ -91,61 +60,57 @@ async function handleGlobalReport(
 }
 
 async function executeAction(
-  token: string,
-  owner: string,
-  repo: string,
+  client: GitHubClient,
   action: WriteRequest['action']
 ): Promise<Record<string, unknown>> {
   switch (action.type) {
     case 'upsertComment':
-      await upsertComment(token, owner, repo, action.pr, action.marker, action.body)
+      await client.upsertComment(action.pr, action.marker, action.body)
       return {}
 
     case 'createComment':
-      await createIssueComment(token, owner, repo, action.pr, action.body)
+      await client.createComment(action.pr, action.body)
       return {}
 
     case 'ensureLabel':
-      await ensureLabel(token, owner, repo, action.name, action.color)
+      await client.ensureLabel(action.name, action.color)
       return {}
 
     case 'applyLabels':
-      await addLabels(token, owner, repo, action.pr, action.labels)
+      await client.addLabels(action.pr, action.labels)
       return {}
 
     case 'removeSlopperLabels':
-      await removeSlopperLabels(token, owner, repo, action.pr)
+      await client.removeSlopperLabels(action.pr)
       return {}
 
     case 'closePr':
-      await closePr(token, owner, repo, action.pr)
+      await client.closePr(action.pr)
       return {}
 
     case 'approvePr':
-      await approvePr(token, owner, repo, action.pr, action.body)
+      await client.approvePr(action.pr, action.body)
       return {}
 
     case 'requestReviewers':
-      await requestReviewers(token, owner, repo, action.pr, action.reviewers)
+      await client.requestReviewers(action.pr, action.reviewers)
       return {}
 
     case 'createOrUpdateFile':
-      await createOrUpdateFile(token, `${owner}/${repo}`, action.path, action.message, action.content)
+      await client.createOrUpdateFile(action.path, action.message, action.content)
       return {}
 
     case 'createVouchPr': {
-      const prNumber = await createVouchPr(token, owner, repo, action.username, action.content)
+      const prNumber = await client.createVouchPr(action.username, action.content)
+      return { prNumber }
+    }
+
+    case 'createBanPr': {
+      const prNumber = await client.createBanPr(action.username, action.content)
       return { prNumber }
     }
 
     default:
       throw new Error(`Unknown action type: ${(action as { type: string }).type}`)
   }
-}
-
-function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { 'Content-Type': 'application/json' }
-  })
 }

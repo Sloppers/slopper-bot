@@ -1,447 +1,201 @@
 const API = 'https://api.github.com'
 const UA = 'slopper-bot/1.0'
 
-export async function createAppJwt(appId: string, privateKey: string): Promise<string> {
-  const pem = privateKey
-    .replace(/-----BEGIN PRIVATE KEY-----/, '')
-    .replace(/-----END PRIVATE KEY-----/, '')
-    .replace(/\s/g, '')
+export class GitHubClient {
+  constructor(
+    private readonly token: string,
+    private readonly owner: string,
+    private readonly repo: string
+  ) {}
 
-  const der = Uint8Array.from(atob(pem), c => c.charCodeAt(0))
+  static async createAppJwt(appId: string, privateKey: string): Promise<string> {
+    const pem = privateKey
+      .replace(/-----BEGIN PRIVATE KEY-----/, '')
+      .replace(/-----END PRIVATE KEY-----/, '')
+      .replace(/\s/g, '')
 
-  const key = await crypto.subtle.importKey(
-    'pkcs8',
-    der,
-    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-    false,
-    ['sign']
-  )
+    const der = Uint8Array.from(atob(pem), c => c.charCodeAt(0))
 
-  const now = Math.floor(Date.now() / 1000)
-  const header = base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))
-  const payload = base64url(JSON.stringify({ iat: now - 60, exp: now + 540, iss: appId }))
-  const data = new TextEncoder().encode(`${header}.${payload}`)
+    const key = await crypto.subtle.importKey(
+      'pkcs8', der,
+      { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+      false, ['sign']
+    )
 
-  const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, data)
+    const now = Math.floor(Date.now() / 1000)
+    const header = base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))
+    const payload = base64url(JSON.stringify({ iat: now - 60, exp: now + 540, iss: appId }))
+    const data = new TextEncoder().encode(`${header}.${payload}`)
+    const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, data)
 
-  return `${header}.${payload}.${base64urlBuffer(sig)}`
-}
-
-export async function getInstallationToken(jwt: string, installationId: number): Promise<string> {
-  const res = await ghFetch(`${API}/app/installations/${installationId}/access_tokens`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${jwt}` }
-  })
-  const data = await res.json() as { token: string }
-  return data.token
-}
-
-export async function getCollaboratorPermission(
-  token: string,
-  owner: string,
-  repo: string,
-  username: string
-): Promise<string> {
-  const res = await ghFetch(
-    `${API}/repos/${owner}/${repo}/collaborators/${username}/permission`,
-    { headers: { Authorization: `token ${token}` } }
-  )
-  const data = await res.json() as { permission: string }
-  return data.permission
-}
-
-export async function createOrUpdateFile(
-  token: string,
-  repo: string,
-  path: string,
-  message: string,
-  content: string
-): Promise<void> {
-  const existingRes = await ghFetch(`${API}/repos/${repo}/contents/${path}`, {
-    headers: { Authorization: `token ${token}` }
-  })
-
-  let sha: string | undefined
-  let existingContent = ''
-
-  if (existingRes.ok) {
-    const data = await existingRes.json() as { sha: string; content: string }
-    sha = data.sha
-    existingContent = atob(data.content.replace(/\n/g, ''))
+    return `${header}.${payload}.${base64urlBuffer(sig)}`
   }
 
-  const finalContent = existingContent
-    ? `${existingContent}\n---\n${content}`
-    : content
-
-  const body: Record<string, unknown> = {
-    message,
-    content: btoa(finalContent),
+  static async getInstallationToken(jwt: string, installationId: number): Promise<string> {
+    const res = await ghFetch(`${API}/app/installations/${installationId}/access_tokens`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${jwt}` }
+    })
+    const data = await res.json() as { token: string }
+    return data.token
   }
-  if (sha) body.sha = sha
 
-  await ghFetch(`${API}/repos/${repo}/contents/${path}`, {
-    method: 'PUT',
-    headers: { Authorization: `token ${token}` },
-    body: JSON.stringify(body)
-  })
-}
-
-export async function getFileContent(token: string, repo: string, path: string): Promise<string | null> {
-  const res = await ghFetch(`${API}/repos/${repo}/contents/${path}`, {
-    headers: { Authorization: `token ${token}` }
-  })
-  if (!res.ok) return null
-  const data = await res.json() as { content: string }
-  return atob(data.content.replace(/\n/g, ''))
-}
-
-export async function addReaction(
-  token: string,
-  owner: string,
-  repo: string,
-  commentId: number,
-  reaction: string
-): Promise<void> {
-  await ghFetch(`${API}/repos/${owner}/${repo}/issues/comments/${commentId}/reactions`, {
-    method: 'POST',
-    headers: { Authorization: `token ${token}` },
-    body: JSON.stringify({ content: reaction })
-  })
-}
-
-export async function getAppInstallation(jwt: string, org: string): Promise<number | null> {
-  const res = await ghFetch(`${API}/app/installations`, {
-    headers: { Authorization: `Bearer ${jwt}` }
-  })
-  if (!res.ok) return null
-  const installations = await res.json() as { id: number; account: { login: string } }[]
-  const match = installations.find(i => i.account.login.toLowerCase() === org.toLowerCase())
-  return match?.id ?? null
-}
-
-export async function getComment(
-  owner: string,
-  repo: string,
-  commentId: number
-): Promise<{ body: string; user: { login: string; type: string } } | null> {
-  const res = await fetch(`${API}/repos/${owner}/${repo}/issues/comments/${commentId}`, {
-    headers: { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': UA }
-  })
-  if (!res.ok) return null
-  return await res.json() as { body: string; user: { login: string; type: string } }
-}
-
-export async function listComments(
-  token: string,
-  owner: string,
-  repo: string,
-  issueNumber: number
-): Promise<{ id: number; body: string }[]> {
-  const res = await ghFetch(
-    `${API}/repos/${owner}/${repo}/issues/${issueNumber}/comments?per_page=100`,
-    { headers: { Authorization: `token ${token}` } }
-  )
-  return await res.json() as { id: number; body: string }[]
-}
-
-export async function updateComment(
-  token: string,
-  owner: string,
-  repo: string,
-  commentId: number,
-  body: string
-): Promise<void> {
-  await ghFetch(`${API}/repos/${owner}/${repo}/issues/comments/${commentId}`, {
-    method: 'PATCH',
-    headers: { Authorization: `token ${token}` },
-    body: JSON.stringify({ body })
-  })
-}
-
-export async function createIssueComment(
-  token: string,
-  owner: string,
-  repo: string,
-  issueNumber: number,
-  body: string
-): Promise<void> {
-  await ghFetch(`${API}/repos/${owner}/${repo}/issues/${issueNumber}/comments`, {
-    method: 'POST',
-    headers: { Authorization: `token ${token}` },
-    body: JSON.stringify({ body })
-  })
-}
-
-export async function upsertComment(
-  token: string,
-  owner: string,
-  repo: string,
-  issueNumber: number,
-  marker: string,
-  body: string
-): Promise<void> {
-  const comments = await listComments(token, owner, repo, issueNumber)
-  const existing = comments.find(c => c.body?.includes(marker))
-  if (existing) {
-    await updateComment(token, owner, repo, existing.id, body)
-  } else {
-    await createIssueComment(token, owner, repo, issueNumber, body)
+  static async getAppInstallation(jwt: string, org: string): Promise<number | null> {
+    const res = await ghFetch(`${API}/app/installations`, {
+      headers: { Authorization: `Bearer ${jwt}` }
+    })
+    if (!res.ok) return null
+    const installations = await res.json() as { id: number; account: { login: string } }[]
+    const match = installations.find(i => i.account.login.toLowerCase() === org.toLowerCase())
+    return match?.id ?? null
   }
-}
 
-export async function closePr(
-  token: string,
-  owner: string,
-  repo: string,
-  prNumber: number
-): Promise<void> {
-  await ghFetch(`${API}/repos/${owner}/${repo}/pulls/${prNumber}`, {
-    method: 'PATCH',
-    headers: { Authorization: `token ${token}` },
-    body: JSON.stringify({ state: 'closed' })
-  })
-}
+  static async getComment(
+    owner: string, repo: string, commentId: number
+  ): Promise<{ body: string; user: { login: string; type: string } } | null> {
+    const res = await fetch(`${API}/repos/${owner}/${repo}/issues/comments/${commentId}`, {
+      headers: { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': UA }
+    })
+    if (!res.ok) return null
+    return await res.json() as { body: string; user: { login: string; type: string } }
+  }
 
-export async function approvePr(
-  token: string,
-  owner: string,
-  repo: string,
-  prNumber: number,
-  body: string
-): Promise<void> {
-  await ghFetch(`${API}/repos/${owner}/${repo}/pulls/${prNumber}/reviews`, {
-    method: 'POST',
-    headers: { Authorization: `token ${token}` },
-    body: JSON.stringify({ event: 'APPROVE', body })
-  })
-}
+  async listComments(issueNumber: number): Promise<{ id: number; body: string }[]> {
+    const res = await this.get(`/issues/${issueNumber}/comments?per_page=100`)
+    return await res.json() as { id: number; body: string }[]
+  }
 
-export async function requestReviewers(
-  token: string,
-  owner: string,
-  repo: string,
-  prNumber: number,
-  reviewers: string[]
-): Promise<void> {
-  await ghFetch(`${API}/repos/${owner}/${repo}/pulls/${prNumber}/requested_reviewers`, {
-    method: 'POST',
-    headers: { Authorization: `token ${token}` },
-    body: JSON.stringify({ reviewers })
-  })
-}
+  async updateComment(commentId: number, body: string): Promise<void> {
+    await this.request('PATCH', `/issues/comments/${commentId}`, { body })
+  }
 
-export async function getLabel(
-  token: string,
-  owner: string,
-  repo: string,
-  name: string
-): Promise<boolean> {
-  const res = await ghFetch(`${API}/repos/${owner}/${repo}/labels/${encodeURIComponent(name)}`, {
-    headers: { Authorization: `token ${token}` }
-  })
-  return res.ok
-}
+  async createComment(issueNumber: number, body: string): Promise<void> {
+    await this.request('POST', `/issues/${issueNumber}/comments`, { body })
+  }
 
-export async function createLabel(
-  token: string,
-  owner: string,
-  repo: string,
-  name: string,
-  color: string
-): Promise<void> {
-  await ghFetch(`${API}/repos/${owner}/${repo}/labels`, {
-    method: 'POST',
-    headers: { Authorization: `token ${token}` },
-    body: JSON.stringify({ name, color, description: 'Slopper PR trust analysis label' })
-  })
-}
-
-export async function ensureLabel(
-  token: string,
-  owner: string,
-  repo: string,
-  name: string,
-  color: string
-): Promise<void> {
-  const exists = await getLabel(token, owner, repo, name)
-  if (!exists) await createLabel(token, owner, repo, name, color)
-}
-
-export async function addLabels(
-  token: string,
-  owner: string,
-  repo: string,
-  issueNumber: number,
-  labels: string[]
-): Promise<void> {
-  await ghFetch(`${API}/repos/${owner}/${repo}/issues/${issueNumber}/labels`, {
-    method: 'POST',
-    headers: { Authorization: `token ${token}` },
-    body: JSON.stringify({ labels })
-  })
-}
-
-export async function listLabelsOnIssue(
-  token: string,
-  owner: string,
-  repo: string,
-  issueNumber: number
-): Promise<{ name: string }[]> {
-  const res = await ghFetch(
-    `${API}/repos/${owner}/${repo}/issues/${issueNumber}/labels`,
-    { headers: { Authorization: `token ${token}` } }
-  )
-  return await res.json() as { name: string }[]
-}
-
-export async function removeLabel(
-  token: string,
-  owner: string,
-  repo: string,
-  issueNumber: number,
-  name: string
-): Promise<void> {
-  await ghFetch(
-    `${API}/repos/${owner}/${repo}/issues/${issueNumber}/labels/${encodeURIComponent(name)}`,
-    { method: 'DELETE', headers: { Authorization: `token ${token}` } }
-  )
-}
-
-export async function removeSlopperLabels(
-  token: string,
-  owner: string,
-  repo: string,
-  issueNumber: number
-): Promise<void> {
-  const labels = await listLabelsOnIssue(token, owner, repo, issueNumber)
-  for (const label of labels) {
-    if (label.name.startsWith('slopper/')) {
-      try { await removeLabel(token, owner, repo, issueNumber, label.name) } catch { /* race */ }
+  async upsertComment(issueNumber: number, marker: string, body: string): Promise<void> {
+    const comments = await this.listComments(issueNumber)
+    const existing = comments.find(c => c.body?.includes(marker))
+    if (existing) {
+      await this.updateComment(existing.id, body)
+    } else {
+      await this.createComment(issueNumber, body)
     }
   }
-}
 
-export async function getDefaultBranch(
-  token: string,
-  owner: string,
-  repo: string
-): Promise<string> {
-  const res = await ghFetch(`${API}/repos/${owner}/${repo}`, {
-    headers: { Authorization: `token ${token}` }
-  })
-  const data = await res.json() as { default_branch: string }
-  return data.default_branch
-}
+  async closePr(prNumber: number): Promise<void> {
+    await this.request('PATCH', `/pulls/${prNumber}`, { state: 'closed' })
+  }
 
-export async function createVouchPr(
-  token: string,
-  owner: string,
-  repo: string,
-  username: string,
-  content: string
-): Promise<number> {
-  const defaultBranch = await getDefaultBranch(token, owner, repo)
-  const branch = `slopper/vouch-${username}`
-  const path = `.slopper.d/vouched/${username}`
+  async approvePr(prNumber: number, body: string): Promise<void> {
+    await this.request('POST', `/pulls/${prNumber}/reviews`, { event: 'APPROVE', body })
+  }
 
-  const refRes = await ghFetch(
-    `${API}/repos/${owner}/${repo}/git/ref/heads/${defaultBranch}`,
-    { headers: { Authorization: `token ${token}` } }
-  )
-  const refData = await refRes.json() as { object: { sha: string } }
+  async requestReviewers(prNumber: number, reviewers: string[]): Promise<void> {
+    await this.request('POST', `/pulls/${prNumber}/requested_reviewers`, { reviewers })
+  }
 
-  await ghFetch(`${API}/repos/${owner}/${repo}/git/refs`, {
-    method: 'POST',
-    headers: { Authorization: `token ${token}` },
-    body: JSON.stringify({ ref: `refs/heads/${branch}`, sha: refData.object.sha })
-  })
+  async ensureLabel(name: string, color: string): Promise<void> {
+    const res = await this.get(`/labels/${encodeURIComponent(name)}`)
+    if (!res.ok) {
+      await this.request('POST', '/labels', { name, color, description: 'Slopper PR trust analysis label' })
+    }
+  }
 
-  await ghFetch(`${API}/repos/${owner}/${repo}/contents/${path}`, {
-    method: 'PUT',
-    headers: { Authorization: `token ${token}` },
-    body: JSON.stringify({
-      message: `slopper: vouch ${username}`,
-      content: btoa(content),
-      branch
+  async addLabels(issueNumber: number, labels: string[]): Promise<void> {
+    await this.request('POST', `/issues/${issueNumber}/labels`, { labels })
+  }
+
+  async removeSlopperLabels(issueNumber: number): Promise<void> {
+    const res = await this.get(`/issues/${issueNumber}/labels`)
+    const labels = await res.json() as { name: string }[]
+    for (const label of labels) {
+      if (label.name.startsWith('slopper/')) {
+        try {
+          await ghFetch(`${API}/repos/${this.owner}/${this.repo}/issues/${issueNumber}/labels/${encodeURIComponent(label.name)}`, {
+            method: 'DELETE', headers: { Authorization: `token ${this.token}` }
+          })
+        } catch { /* race */ }
+      }
+    }
+  }
+
+  async getFileContent(path: string): Promise<string | null> {
+    const res = await this.get(`/contents/${path}`)
+    if (!res.ok) return null
+    const data = await res.json() as { content: string }
+    return atob(data.content.replace(/\n/g, ''))
+  }
+
+  async createOrUpdateFile(path: string, message: string, content: string): Promise<void> {
+    const existingRes = await this.get(`/contents/${path}`)
+
+    let sha: string | undefined
+    let existingContent = ''
+
+    if (existingRes.ok) {
+      const data = await existingRes.json() as { sha: string; content: string }
+      sha = data.sha
+      existingContent = atob(data.content.replace(/\n/g, ''))
+    }
+
+    const finalContent = existingContent
+      ? `${existingContent}\n---\n${content}`
+      : content
+
+    const body: Record<string, unknown> = { message, content: btoa(finalContent) }
+    if (sha) body.sha = sha
+
+    await ghFetch(`${API}/repos/${this.owner}/${this.repo}/contents/${path}`, {
+      method: 'PUT',
+      headers: { Authorization: `token ${this.token}` },
+      body: JSON.stringify(body)
     })
-  })
+  }
 
-  const prRes = await ghFetch(`${API}/repos/${owner}/${repo}/pulls`, {
-    method: 'POST',
-    headers: { Authorization: `token ${token}` },
-    body: JSON.stringify({
-      title: `slopper: vouch ${username}`,
-      head: branch,
-      base: defaultBranch,
+  async getDefaultBranch(): Promise<string> {
+    const res = await this.get('')
+    const data = await res.json() as { default_branch: string }
+    return data.default_branch
+  }
+
+  async getCollaboratorPermission(username: string): Promise<string> {
+    const res = await this.get(`/collaborators/${username}/permission`)
+    const data = await res.json() as { permission: string }
+    return data.permission
+  }
+
+  async addReaction(commentId: number, reaction: string): Promise<void> {
+    await this.request('POST', `/issues/comments/${commentId}/reactions`, { content: reaction })
+  }
+
+  async createVouchPr(username: string, content: string): Promise<number> {
+    return this.createSlopperPr({
+      action: 'vouch', username, content, dir: 'vouched',
       body: `Adding **@${username}** to the vouched contributors list.\n\n` +
         `Requested via \`/slopper vouch\`. This PR was created automatically by Slopper.`
     })
-  })
-  const prData = await prRes.json() as { number: number }
-  return prData.number
-}
-
-export async function createReportPr(
-  token: string,
-  communityRepo: string,
-  username: string,
-  content: string,
-  sourceRepo: string,
-  pr: number,
-  reporter: string
-): Promise<number> {
-  const [owner, repo] = communityRepo.split('/')
-  const defaultBranch = await getDefaultBranch(token, owner, repo)
-  const branch = `slopper/report-${username}-${Date.now()}`
-  const path = `risky_users/${username}`
-
-  const refRes = await ghFetch(
-    `${API}/repos/${owner}/${repo}/git/ref/heads/${defaultBranch}`,
-    { headers: { Authorization: `token ${token}` } }
-  )
-  const refData = await refRes.json() as { object: { sha: string } }
-
-  await ghFetch(`${API}/repos/${owner}/${repo}/git/refs`, {
-    method: 'POST',
-    headers: { Authorization: `token ${token}` },
-    body: JSON.stringify({ ref: `refs/heads/${branch}`, sha: refData.object.sha })
-  })
-
-  const putBody: Record<string, unknown> = {
-    message: `slopper: report ${username} (via ${sourceRepo}#${pr})`,
-    content: btoa(content),
-    branch
   }
 
-  const existingRes = await ghFetch(
-    `${API}/repos/${owner}/${repo}/contents/${path}?ref=${branch}`,
-    { headers: { Authorization: `token ${token}` } }
-  )
-  if (existingRes.ok) {
-    const existing = await existingRes.json() as { sha: string; content: string }
-    putBody.sha = existing.sha
-    const oldContent = atob(existing.content.replace(/\n/g, ''))
-    putBody.content = btoa(`${oldContent}\n---\n${content}`)
+  async createBanPr(username: string, content: string): Promise<number> {
+    return this.createSlopperPr({
+      action: 'ban', username, content, dir: 'banned',
+      body: `Adding **@${username}** to the banned contributors list.\n\n` +
+        `Requested via \`/slopper report\`. This PR was created automatically by Slopper.\n\n` +
+        `To unban this user, close this PR (or delete the file if already merged).`
+    })
   }
 
-  const fileRes = await ghFetch(`${API}/repos/${owner}/${repo}/contents/${path}`, {
-    method: 'PUT',
-    headers: { Authorization: `token ${token}` },
-    body: JSON.stringify(putBody)
-  })
-  if (!fileRes.ok) {
-    const err = await fileRes.text()
-    throw new Error(`Failed to create file on branch: ${err}`)
-  }
-
-  const prRes = await ghFetch(`${API}/repos/${owner}/${repo}/pulls`, {
-    method: 'POST',
-    headers: { Authorization: `token ${token}` },
-    body: JSON.stringify({
-      title: `slopper: report ${username}`,
-      head: branch,
-      base: defaultBranch,
+  async createReportPr(
+    username: string, content: string,
+    sourceRepo: string, pr: number, reporter: string
+  ): Promise<number> {
+    return this.createSlopperPr({
+      action: 'report', username, content,
+      path: `risky_users/${username}`,
+      branch: `slopper/report-${username}-${Date.now()}`,
+      commitMessage: `slopper: report ${username} (via ${sourceRepo}#${pr})`,
+      append: true,
       body: `Adding **@${username}** to the risky users list.\n\n` +
         `- **Reported by:** @${reporter}\n` +
         `- **Source:** ${sourceRepo}#${pr}\n` +
@@ -449,19 +203,96 @@ export async function createReportPr(
         `To unban this user, close this PR (or delete the file if already merged).\n\n` +
         `This PR was created automatically by [Slopper](https://github.com/Sloppers/Slopper).`
     })
-  })
-  if (!prRes.ok) {
-    const err = await prRes.text()
-    throw new Error(`Failed to create PR: ${err}`)
   }
-  const prData = await prRes.json() as { number: number }
-  return prData.number
+
+  private async createSlopperPr(opts: {
+    action: string
+    username: string
+    content: string
+    body: string
+    dir?: string
+    path?: string
+    branch?: string
+    commitMessage?: string
+    append?: boolean
+  }): Promise<number> {
+    const defaultBranch = await this.getDefaultBranch()
+    const branch = opts.branch ?? `slopper/${opts.action}-${opts.username}`
+    const path = opts.path ?? `.slopper.d/${opts.dir}/${opts.username}`
+    const commitMessage = opts.commitMessage ?? `slopper: ${opts.action} ${opts.username}`
+
+    const refRes = await this.get(`/git/ref/heads/${defaultBranch}`)
+    const refData = await refRes.json() as { object: { sha: string } }
+
+    await this.request('POST', '/git/refs', {
+      ref: `refs/heads/${branch}`, sha: refData.object.sha
+    })
+
+    let fileContent = opts.content
+    let sha: string | undefined
+
+    if (opts.append) {
+      const existingRes = await ghFetch(
+        `${API}/repos/${this.owner}/${this.repo}/contents/${path}?ref=${branch}`,
+        { headers: { Authorization: `token ${this.token}` } }
+      )
+      if (existingRes.ok) {
+        const existing = await existingRes.json() as { sha: string; content: string }
+        sha = existing.sha
+        const oldContent = atob(existing.content.replace(/\n/g, ''))
+        fileContent = `${oldContent}\n---\n${opts.content}`
+      }
+    }
+
+    const putBody: Record<string, unknown> = {
+      message: commitMessage,
+      content: btoa(fileContent),
+      branch
+    }
+    if (sha) putBody.sha = sha
+
+    const fileRes = await ghFetch(
+      `${API}/repos/${this.owner}/${this.repo}/contents/${path}`,
+      { method: 'PUT', headers: { Authorization: `token ${this.token}` }, body: JSON.stringify(putBody) }
+    )
+    if (!fileRes.ok) {
+      const err = await fileRes.text()
+      throw new Error(`Failed to create file on branch: ${err}`)
+    }
+
+    const prRes = await this.request('POST', '/pulls', {
+      title: `slopper: ${opts.action} ${opts.username}`,
+      head: branch,
+      base: defaultBranch,
+      body: opts.body
+    })
+    if (!prRes.ok) {
+      const err = await prRes.text()
+      throw new Error(`Failed to create PR: ${err}`)
+    }
+    const prData = await prRes.json() as { number: number }
+    return prData.number
+  }
+
+  private get(path: string): Promise<Response> {
+    return ghFetch(`${API}/repos/${this.owner}/${this.repo}${path}`, {
+      headers: { Authorization: `token ${this.token}` }
+    })
+  }
+
+  private request(method: string, path: string, body: unknown): Promise<Response> {
+    return ghFetch(`${API}/repos/${this.owner}/${this.repo}${path}`, {
+      method,
+      headers: { Authorization: `token ${this.token}` },
+      body: JSON.stringify(body)
+    })
+  }
 }
 
 async function ghFetch(url: string, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers)
   headers.set('Accept', 'application/vnd.github.v3+json')
-  headers.set('User-Agent', UA)
+  headers.set('User-Agent', 'slopper-bot/1.0')
   if (init?.body) headers.set('Content-Type', 'application/json')
   return fetch(url, { ...init, headers })
 }
