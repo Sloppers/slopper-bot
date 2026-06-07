@@ -5,3 +5,7 @@ compatibility_flags = ["nodejs_compat"]
 
 [vars]
 COMMUNITY_REPO = "Sloppers/community-list"
+
+[[kv_namespaces]]
+binding = "RATE_LIMIT"
+id = "ebc6f12ce00043a68c5f6ccc7aab2448"

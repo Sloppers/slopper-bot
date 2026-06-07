@@ -1,5 +1,5 @@
 import type { WriteRequest, Env } from '../types'
-import { verifyOidcToken, getTokenForOrg } from '../auth'
+import { verifyOidcToken, getTokenForOrg, checkRateLimit } from '../auth'
 import { GitHubClient } from '../client'
 import { json, buildReportEntry } from '../helpers'
 
@@ -17,12 +17,23 @@ export async function handleWriteAction(body: WriteRequest, env: Env, audience: 
     return json({ error: `OIDC verification failed: ${err instanceof Error ? err.message : err}` }, 401)
   }
 
-  if (action.type === 'globalReport') {
-    return handleGlobalReport(action, claims, owner, repo, env)
-  }
-
   if (claims.repository !== `${owner}/${repo}`) {
     return json({ error: `Repository mismatch: token is for ${claims.repository}, request targets ${owner}/${repo}` }, 403)
+  }
+
+  const account = claims.repository_owner
+
+  if (action.type === 'globalReport') {
+    const rl = await checkRateLimit(env.RATE_LIMIT, account, 'report')
+    if (!rl.allowed) {
+      return json({ error: 'Rate limit exceeded for reports', resetAt: rl.resetAt }, 429)
+    }
+    return handleGlobalReport(action, claims, env)
+  }
+
+  const rl = await checkRateLimit(env.RATE_LIMIT, account, 'write')
+  if (!rl.allowed) {
+    return json({ error: 'Rate limit exceeded', resetAt: rl.resetAt }, 429)
   }
 
   try {
@@ -37,20 +48,21 @@ export async function handleWriteAction(body: WriteRequest, env: Env, audience: 
 
 async function handleGlobalReport(
   action: { type: 'globalReport'; username: string; reporter: string; pr: number },
-  claims: { repository: string },
-  owner: string,
-  repo: string,
+  claims: { repository: string; actor: string },
   env: Env
 ): Promise<Response> {
+  const sourceRepo = claims.repository
+  const reporter = claims.actor
+
   const [communityOwner, communityRepo] = env.COMMUNITY_REPO.split('/')
 
   try {
     const token = await getTokenForOrg(env, communityOwner)
     const client = new GitHubClient(token, communityOwner, communityRepo)
-    const entry = buildReportEntry(action.reporter, `${owner}/${repo}`, action.pr)
+    const entry = buildReportEntry(reporter, sourceRepo, action.pr)
     const prNumber = await client.createReportPr(
       action.username, entry,
-      `${owner}/${repo}`, action.pr, action.reporter
+      sourceRepo, action.pr, reporter
     )
     return json({ ok: true, reported: action.username, prNumber })
   } catch (err) {

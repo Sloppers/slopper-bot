@@ -4,8 +4,6 @@ import * as issues from './issues'
 import * as files from './files'
 import * as slopperPr from './slopper-pr'
 
-export { getComment } from './comments'
-
 export class GitHubClient implements ClientContext {
   constructor(
     readonly token: string,

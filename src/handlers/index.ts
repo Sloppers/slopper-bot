@@ -1,2 +1,2 @@
 export { handleWriteAction } from './write'
-export { handleApiReport, handleWebhookReport } from './report'
+export { handleWebhookReport } from './report'

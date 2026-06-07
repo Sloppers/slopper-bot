@@ -1,6 +1,6 @@
-import type { Env, IssueCommentEvent, ReportRequest, WriteRequest } from './types'
+import type { Env, IssueCommentEvent, WriteRequest } from './types'
 import { verifySignature } from './auth'
-import { handleWriteAction, handleApiReport, handleWebhookReport } from './handlers'
+import { handleWriteAction, handleWebhookReport } from './handlers'
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -14,11 +14,6 @@ export default {
     if (url.pathname === '/api/write') {
       const body = await request.json() as WriteRequest
       return handleWriteAction(body, env, audience)
-    }
-
-    if (url.pathname === '/api/report') {
-      const body = await request.json() as ReportRequest
-      return handleApiReport(body, env)
     }
 
     const signature = request.headers.get('X-Hub-Signature-256')

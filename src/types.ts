@@ -3,14 +3,7 @@ export interface Env {
   PRIVATE_KEY: string
   WEBHOOK_SECRET: string
   COMMUNITY_REPO: string
-}
-
-export interface ReportRequest {
-  owner: string
-  repo: string
-  pr: number
-  reportedUser: string
-  commentId: number
+  RATE_LIMIT: KVNamespace
 }
 
 export type WriteAction =

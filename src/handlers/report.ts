@@ -1,44 +1,9 @@
-import type { ReportRequest, IssueCommentEvent, Env } from '../types'
-import { getTokenForOrg, getTokenForInstallation } from '../auth'
-import { GitHubClient, getComment } from '../client'
+import type { IssueCommentEvent, Env } from '../types'
+import { getTokenForOrg, getTokenForInstallation, checkRateLimit } from '../auth'
+import { GitHubClient } from '../client'
 import { json, buildReportEntry } from '../helpers'
 
 const REPORT_REGEX = /^\/slopper\s+report\s*$/im
-
-export async function handleApiReport(body: ReportRequest, env: Env): Promise<Response> {
-  const { owner, repo, pr, reportedUser, commentId } = body
-
-  if (!owner || !repo || !pr || !reportedUser || !commentId) {
-    return json({ error: 'missing fields' }, 400)
-  }
-
-  const comment = await getComment(owner, repo, commentId)
-  if (!comment) return json({ error: 'comment not found' }, 404)
-  if (!REPORT_REGEX.test(comment.body)) return json({ error: 'comment is not a /slopper report' }, 400)
-
-  const reporter = comment.user.login
-  if (comment.user.type === 'Bot') return json({ ok: true, skipped: 'bot' })
-  if (reporter === reportedUser) return json({ ok: true, skipped: 'self-report' })
-
-  const token = await getTokenForOrg(env, env.COMMUNITY_REPO.split('/')[0])
-  const [communityOwner, communityRepo] = env.COMMUNITY_REPO.split('/')
-  const client = new GitHubClient(token, communityOwner, communityRepo)
-
-  const existing = await client.getFileContent(`risky_users/${reportedUser}`)
-  const entry = buildReportEntry(reporter, `${owner}/${repo}`, pr)
-
-  if (existing && existing.includes(`reporter: ${reporter}`) && existing.includes(`repo: ${owner}/${repo}`) && existing.includes(`pr: #${pr}`)) {
-    return json({ ok: true, skipped: 'duplicate' })
-  }
-
-  await client.createOrUpdateFile(
-    `risky_users/${reportedUser}`,
-    `report: ${reportedUser} (via ${owner}/${repo}#${pr})`,
-    entry
-  )
-
-  return json({ ok: true, reported: reportedUser })
-}
 
 export async function handleWebhookReport(event: IssueCommentEvent, env: Env): Promise<Response> {
   if (event.action !== 'created') return json({ ok: true })
@@ -68,6 +33,12 @@ export async function handleWebhookReport(event: IssueCommentEvent, env: Env): P
     return json({ ok: true })
   }
 
+  const rl = await checkRateLimit(env.RATE_LIMIT, repoOwner, 'report')
+  if (!rl.allowed) {
+    await repoClient.addReaction(commentId, 'confused')
+    return json({ error: 'Rate limit exceeded for reports', resetAt: rl.resetAt }, 429)
+  }
+
   const communityToken = await getTokenForOrg(env, env.COMMUNITY_REPO.split('/')[0])
   const [communityOwner, communityRepo] = env.COMMUNITY_REPO.split('/')
   const communityClient = new GitHubClient(communityToken, communityOwner, communityRepo)
@@ -80,10 +51,9 @@ export async function handleWebhookReport(event: IssueCommentEvent, env: Env): P
     return json({ ok: true })
   }
 
-  await communityClient.createOrUpdateFile(
-    `risky_users/${reportedUser}`,
-    `report: ${reportedUser} (via ${repoOwner}/${repoName}#${prNumber})`,
-    entry
+  await communityClient.createReportPr(
+    reportedUser, entry,
+    `${repoOwner}/${repoName}`, prNumber, reporter
   )
 
   await repoClient.addReaction(commentId, 'rocket')
