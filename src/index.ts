@@ -1,11 +1,18 @@
-import type { Env, IssueCommentEvent } from './types'
+import type { Env, IssueCommentEvent, ReportRequest } from './types'
 import { verifySignature } from './verify'
-import { handleReport } from './report'
+import { handleApiReport, handleWebhookReport } from './report'
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method !== 'POST') {
       return new Response('Method not allowed', { status: 405 })
+    }
+
+    const url = new URL(request.url)
+
+    if (url.pathname === '/api/report') {
+      const body = await request.json() as ReportRequest
+      return handleApiReport(body, env)
     }
 
     const signature = request.headers.get('X-Hub-Signature-256')
@@ -28,7 +35,7 @@ export default {
 
     if (eventType === 'issue_comment') {
       const event = JSON.parse(body) as IssueCommentEvent
-      return handleReport(event, env)
+      return handleWebhookReport(event, env)
     }
 
     return new Response(JSON.stringify({ ok: true }), { status: 200 })

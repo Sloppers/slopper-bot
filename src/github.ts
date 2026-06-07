@@ -110,6 +110,28 @@ export async function addReaction(
   })
 }
 
+export async function getAppInstallation(jwt: string, org: string): Promise<number | null> {
+  const res = await ghFetch(`${API}/app/installations`, {
+    headers: { Authorization: `Bearer ${jwt}` }
+  })
+  if (!res.ok) return null
+  const installations = await res.json() as { id: number; account: { login: string } }[]
+  const match = installations.find(i => i.account.login.toLowerCase() === org.toLowerCase())
+  return match?.id ?? null
+}
+
+export async function getComment(
+  owner: string,
+  repo: string,
+  commentId: number
+): Promise<{ body: string; user: { login: string; type: string } } | null> {
+  const res = await fetch(`${API}/repos/${owner}/${repo}/issues/comments/${commentId}`, {
+    headers: { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': UA }
+  })
+  if (!res.ok) return null
+  return await res.json() as { body: string; user: { login: string; type: string } }
+}
+
 async function ghFetch(url: string, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers)
   headers.set('Accept', 'application/vnd.github.v3+json')

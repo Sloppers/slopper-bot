@@ -5,6 +5,14 @@ export interface Env {
   COMMUNITY_REPO: string
 }
 
+export interface ReportRequest {
+  owner: string
+  repo: string
+  pr: number
+  reportedUser: string
+  commentId: number
+}
+
 export interface IssueCommentEvent {
   action: string
   comment: {
